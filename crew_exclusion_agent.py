@@ -2,7 +2,6 @@
 
 import os
 import json
-import re
 import pandas as pd
 from pathlib import Path
 from dotenv import load_dotenv
@@ -54,7 +53,11 @@ class ExclusionAgent(Agent):
         )
 
     def _review_llm(self, topic: str, additional_context: str):
-        additional_context = additional_context.strip() if additional_context else "None"
+        # ✅ Fix: Handle NaN or non-string additional_context
+        if not isinstance(additional_context, str):
+            additional_context = ""
+        additional_context = additional_context.strip() or "None"
+
         prompt = EXCLUSION_PROMPT.format(topic=topic, additional_context=additional_context)
 
         try:
@@ -79,11 +82,18 @@ class ExclusionAgent(Agent):
             }
 
     def run(self, input_data: dict) -> dict:
-        df = input_data.get("llm_dataframe")
         url = input_data.get("url")
+        domain = urlparse(url).netloc.replace('.', '_') if url else "unknown"
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
 
-        if df is None or not isinstance(df, pd.DataFrame):
-            raise ValueError("Missing or invalid 'llm_dataframe' in input_data")
+        # Load DataFrame
+        df = input_data.get("llm_dataframe")
+        if df is None:
+            llm_file = input_data.get("llm_output_file")
+            if not llm_file or not os.path.exists(llm_file):
+                raise FileNotFoundError("No valid 'llm_dataframe' or 'llm_output_file' found.")
+            print(f"📥 Loading LLM output from file: {llm_file}")
+            df = pd.read_csv(llm_file)
 
         print(f"🔍 Running exclusion filter on {len(df)} rows")
 
@@ -95,13 +105,12 @@ class ExclusionAgent(Agent):
             df.at[i, "Recommendation"] = result.get("recommendation", "Exclude")
             df.at[i, "Reason"] = result.get("reason", "⚠️ No reason provided")
 
-        # Save output
-        domain = urlparse(url).netloc.replace('.', '_') if url else "unknown"
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         output_path = OUTPUT_DIR / f"{domain}_exclusion_checked_{timestamp}.csv"
         df.to_csv(output_path, index=False, encoding="utf-8-sig")
         print(f"✅ Exclusion results saved to: {output_path}")
 
-        input_data["exclusion_file"] = str(output_path)
-        input_data["filtered_dataframe"] = df
-        return input_data
+        return {
+            "url": url,
+            "exclusion_file": str(output_path),
+            "filtered_dataframe": df
+        }

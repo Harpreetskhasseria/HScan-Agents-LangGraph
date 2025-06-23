@@ -11,8 +11,8 @@ from langgraph.graph import StateGraph, END
 
 from crew_scraper_agent import ScraperAgent
 from crew_cleaner_agent import CleanerAgent
-from crew_formatter_agent import FormatterAgent
-from crew_extractor_agent import ExtractorAgent
+from crew_html_extractor_agent import HTMLExtractorAgent
+from crew_llm_extractor_agent import LLMExtractorAgent
 from crew_exclusion_agent import ExclusionAgent
 
 load_dotenv()
@@ -33,21 +33,30 @@ def cleaner_node(state: State) -> State:
     log("🧼 [CleanerNode] Cleaning HTML...")
     return CleanerAgent().run(state)
 
-def formatter_node(state: State) -> State:
-    log("📄 [FormatterNode] Converting to PDF...")
-    return FormatterAgent().run(state)
+def html_extractor_node(state: State) -> State:
+    log("🔍 [HTMLExtractorNode] Extracting visible content and links...")
+    return HTMLExtractorAgent().run({
+        "url": state["url"],
+        "cleaned_file": state["cleaned_file"]
+    })
 
-def extractor_node(state: State) -> State:
-    log("🤖 [ExtractorNode] Extracting updates...")
-    return ExtractorAgent().run(state)
+def llm_extractor_node(state: State) -> State:
+    log("🤖 [LLMExtractorNode] Extracting updates with LLM...")
+    return LLMExtractorAgent().run({
+        "url": state["url"],
+        "extracted_file": state["extracted_file"],
+        "extracted_links": state["extracted_links"]
+    })
 
 def exclusion_node(state: State) -> State:
     log("🚫 [ExclusionNode] Filtering updates...")
-    state = ExclusionAgent().run(state)
+    state = ExclusionAgent().run({
+        "url": state["url"],
+        "llm_output_file": state["llm_output_file"]
+    })
     state["final_updates"] = state.get("filtered_dataframe", pd.DataFrame()).to_dict(orient="records")
     return state
 
-# ✅ Fixed output_node that ensures source_url and run_id are added
 def output_node(state: State) -> State:
     updates = state.get("final_updates", [])
     source_url = state.get("url", "unknown")
@@ -71,16 +80,16 @@ def build_graph():
     graph = StateGraph(State)
     graph.add_node("scraper", scraper_node)
     graph.add_node("cleaner", cleaner_node)
-    graph.add_node("formatter", formatter_node)
-    graph.add_node("extractor", extractor_node)
+    graph.add_node("html_extractor", html_extractor_node)
+    graph.add_node("llm_extractor", llm_extractor_node)
     graph.add_node("exclusion", exclusion_node)
     graph.add_node("output", output_node)
 
     graph.set_entry_point("scraper")
     graph.add_edge("scraper", "cleaner")
-    graph.add_edge("cleaner", "formatter")
-    graph.add_edge("formatter", "extractor")
-    graph.add_edge("extractor", "exclusion")
+    graph.add_edge("cleaner", "html_extractor")
+    graph.add_edge("html_extractor", "llm_extractor")
+    graph.add_edge("llm_extractor", "exclusion")
     graph.add_edge("exclusion", "output")
     graph.add_edge("output", END)
 
